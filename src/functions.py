@@ -1,7 +1,10 @@
 import pandas as pd
 from itertools import repeat
 import numpy as np
-from variables import adaptive_version
+from variables import adaptive_version, dtypes
+import xlrd
+import datetime
+import re
 
 def read_path(input_all_paths, denomination):
     df = pd.read_excel(input_all_paths, sheet_name="inputs")
@@ -44,20 +47,16 @@ def transform_F00(df):
     df.loc[:,"AccountCode"] = df.codeAcc+ "_F00_CH"
 
     df.drop("dataPeriod_prev", axis=1, inplace=True)
-    print("***dataframe***")
-    print(df)
+
     years = range(2022, 2026)
     list_df = map(add_year, repeat(df), years)
     list_df = [*list_df]
     list_df.append(df)
     df_concat = pd.concat(list_df).reset_index(drop=True)
     
-    print(df_concat)
-
     col_drop = ["Scope", "Scope_T1"]
     df_concat.drop(col_drop, axis=1, inplace=True)
     group_cols = [col for col in df_concat.columns if col not in ["LC_Amount"]]
-    print(group_cols)
     df_concat = df_concat.groupby(group_cols, as_index=False).sum()
 
     filter_1 = df_concat.dataPeriod.dt.year > 2021
@@ -66,11 +65,59 @@ def transform_F00(df):
 
     return df_concat
 
+def transform_0LIA(df_0LIA01, df_IFRS000, df_dimlevels, df_cecosmap):
+    df = pd.concat([df_0LIA01, df_IFRS000], ignore_index=True)
+
+    keep_col = ["LevelName", "CostCentre"]
+    drop_col = [col for col in df.columns if col not in keep_col]
+    df.drop(drop_col, inplace=True, axis=1)
+
+    df.drop_duplicates(subset=keep_col, inplace=True, ignore_index=True)
+
+    df = pd.merge(df, df_dimlevels[["Lavel Name", "Company"]], left_on="LevelName", right_on="Lavel Name", how="left")
+    df.drop("Lavel Name", axis=1, inplace=True)
+    df.rename(columns={"Company": "D_RU"}, inplace=True)
+
+    df["Is Number"] = np.where(df["CostCentre"].str.fullmatch(r"\d+"), df["CostCentre"], "Change")
+    df["Length4or8"] = np.where((df["Is Number"] != "Change") & (df["Is Number"].str.len().isin([4,8])), df["D_RU"] + df["Is Number"].str[-4:], "Change")
+    
+    df = pd.merge(df, df_cecosmap[["Adaptive PL", "Profit Center"]], left_on="LevelName", right_on="Adaptive PL", how="left")
+    df.drop("Adaptive PL", axis=1, inplace=True)
+    df.rename(columns={"Profit Center": "Profit Center PL"}, inplace=True)
+
+    df = pd.merge(df, df_cecosmap[["Adaptive BS", "Profit Center"]], left_on="LevelName", right_on="Adaptive BS", how="left")
+    df.drop("Adaptive BS", axis=1, inplace=True)
+    df.rename(columns={"Profit Center": "Profit Center BS"}, inplace=True)
+
+    df.to_csv("borrar.csv", index=False)
+
+    df["Profit Center"] = np.where(
+        df["Length4or8"] != "Change",
+        df["Length4or8"],
+        np.where(
+            df["Profit Center PL"].notnull(),
+            df["Profit Center PL"],
+            np.where(
+                df["Profit Center BS"].notnull(),
+                df["Profit Center BS"],
+                df["D_RU"]+"0000"
+                )
+            )
+        )
+    df.to_csv("borrar2.csv", index=False)
+    df["LevelCeCo"] = df["LevelName"] + "_" + df["CostCentre"]
+
+    df.drop(["Is Number", "Length4or8", "Profit Center PL", "Profit Center BS"], axis=1, inplace=True)
+    df.drop_duplicates(subset=["LevelName", "CostCentre", "D_RU"], inplace=True, keep="first", ignore_index=True)
+    df.to_csv("borrar3.csv", index=False)
+    return df
+
+
+
 def transform_FC(df, df_dimlevels):
     #drop null rows in dimlevels
-    print(df_dimlevels.columns)
     nulls = df_dimlevels.Company.isnull()
-    filter_1 = df_dimlevels.Level_type != "Company"
+    filter_1 = df_dimlevels["Level_type"] != "Company"
     index_drop = df_dimlevels[nulls | filter_1].index
     df_dimlevels.drop(index_drop, inplace=True)
     df_dimlevels.reset_index(drop=True, inplace=True)
@@ -307,7 +354,6 @@ def transform_levels(df, df_extramappings_bu21):
     )
 
     df_return = pd.concat([df, df_extramappings_bu21]).reset_index(drop=True)
-
     return df_return
 
 def transform_consoflag(df):
@@ -415,20 +461,154 @@ def transform_deconsolidation(df, df_consoflag):
     # df_dates = df_dates.astype({"Sell_Down_Date": "datetime64[ns]"})
     
     #merge dataframes
-    print("*********", df[df.Sell_Down_Period.isnull()].shape, "********")
-    print("*********", df_dates_concat[df_dates_concat.Sell_Down_Date.isnull()].shape, "********")
-    print(df_dates.isnull().sum())
     df.to_csv("../output/df_pre_merge.csv")
     df_dates_concat.to_csv("../output/df_dates.csv")
     df = df.merge(df_dates_concat, how="left", left_on="Sell_Down_Period", right_on="Sell_Down_Date")
-    print(df.isnull().sum())
     df.drop("Sell_Down_Date", axis=1, inplace=True)
     df.rename(columns={"Date": "dataPeriod", "Flow": "FlowAccount", "Multiplication": "LC_Amount"}, inplace=True)
-    print("*********", df[df.dataPeriod.isnull()].shape, "********")
     #drop columns
     drop_cols = ["Sell_Down_Period", "F98_Account"]
     df.drop(drop_cols, inplace=True, axis=1)
 
     return df
 
+def transform_dimlevels_pl(df):
+    filter_1 = df["Level_type"].isin(["Non-park", "Park"])
+    filter_2 = df["Parent 2 Level Name"] == "Discontinued"
+    index_drop = df[~filter_1 | filter_2].index
 
+    df.drop(index_drop, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    keep_cols = ["Lavel Name", "Company"]
+    drop_cols = [col for col in df.columns if col not in keep_cols]
+
+    df.drop(drop_cols, axis=1, inplace=True)
+
+    df.drop_duplicates(subset=["Company"], inplace=True, ignore_index=True)
+
+    return df
+
+def  transform_fc20_pl(df, df_dimlevels_pl):
+    df["D_RU2"] = np.where(df["D_RU"].str.endswith(("MEP", "OLD", "EM")), df.D_RU.str[:4], df.D_RU)
+    df = pd.merge(df, df_dimlevels_pl[["Company", "Lavel Name"]], left_on="D_RU", right_on="Company", how="left")
+    df.rename(columns={"Lavel Name": "LevelName"}, inplace=True)
+    df.drop(["Company", "D_RU", "D_RU2"], axis=1, inplace=True)
+
+    df["D_SC"] = adaptive_version
+    df["Period_Level"] = df["LevelName"] + "_" + df.dataPeriod.dt.strftime("%Y_%m")
+    df["Partner_Level"] = df["LevelName"] + "_" + df.dataPeriod.dt.strftime("%Y_%m")
+
+    return df
+
+def transform_mappingsim(path):
+    #df sim
+    df_sim = pd.read_excel(path, sheet_name="SAP", skiprows=[0], dtype=dtypes["sim"])
+    keep_rows = ["Conta", "Descritivo EN", "Conta.1", "Filtro w/Detail"]
+    drop_rows = [col for col in df_sim.columns if col not in keep_rows]
+    df_sim.drop(drop_rows, axis=1, inplace=True)
+    df_missing = pd.read_excel(path, sheet_name="Missing_Adaptive", skiprows=[0], dtype=dtypes["missing"])
+    drop_cols = ["Descritivo PT", "Descritivo PT.1", "Descritivo EN.1", "DF", "Rubrica 1", "Rubrica 2", "Filtro"]
+    
+    #df missing
+    df_missing.drop(drop_cols, axis=1, inplace=True)
+    df_mgtd = pd.read_excel(path, sheet_name="MGTD")
+    keep_rows = ["FS", "Filter", "Account", "Account Description EN"]
+    drop_rows = [col for col in df_mgtd.columns if col not in keep_rows]
+    
+    #df mgtd
+    df_mgtd.drop(drop_rows, axis=1, inplace=True)
+    df_mgtd_bsdetail = df_mgtd[df_mgtd.FS=="Balance - detail"].copy().reset_index(drop=True)
+    df_mgtd = pd.merge(df_mgtd, df_mgtd_bsdetail[["Account", "Filter"]], on="Account", how="left")
+    df_mgtd.rename(columns={"Filter_x": "Filter", "Filter_y": "BS_detail.Filter"}, inplace=True)
+    filter_1 = df_mgtd.FS == "Balance - detail"
+    index_drop = df_mgtd[filter_1].index
+    df_mgtd.drop(index_drop, inplace=True)
+    df_mgtd.reset_index(drop=True, inplace=True)
+    notnull = df_mgtd["BS_detail.Filter"].notnull()
+    notna = df_mgtd["BS_detail.Filter"] != "n.a."
+    df_mgtd["Filtro w/Detail"] = np.where((notnull & notna), df_mgtd["BS_detail.Filter"], df_mgtd["Filter"])
+    df_mgtd.rename(columns={"Account": "Conta", "Account Description EN": "Descritivo EN"}, inplace=True)
+    df_mgtd["Conta.1"] = df_mgtd["Conta"]
+    col_drop = ["FS", "Filter", "BS_detail.Filter"]
+    df_mgtd.drop(col_drop, axis=1, inplace=True)
+    
+    #df concat
+    df_concat = pd.concat([df_sim, df_missing, df_mgtd]).reset_index(drop=True)
+    df_concat.rename(columns={"Descritivo EN": "Short Name", "Conta": "Code", "Filtro w/Detail": "Filter", "Conta.1": "Magnitude"}, inplace=True)
+    df_concat["AccountName"] = df_concat["Short Name"]
+    df_concat["P&L"] = np.where(df_concat["Magnitude"].str.startswith("R"), "P&L", "Balance")
+    df_concat.drop_duplicates(subset="Code", inplace=True, ignore_index=True)
+    index_drop = df_concat[df_concat.Code.isnull()].index
+    df_concat.drop(index_drop, inplace=True)
+    df_concat.reset_index(inplace=True, drop=True)
+
+    return df_concat
+
+def excel_to_datetime(excel_date):
+    a = xlrd.xldate.xldate_as_tuple(int(excel_date), 0)
+    return datetime.datetime(*a).strftime("%Y-%m-%d")
+
+def transform_fx(df_fx):
+    df_fx["Date"] = np.where(df_fx["Date"].str.fullmatch(r"\d{5}"), df_fx["Date"].map(lambda x: excel_to_datetime(x)), df_fx["Date"])
+    df_fx["Date"] = df_fx["Date"].astype("datetime64[ns]")
+
+    filter_1 = df_fx["Scenario"] != adaptive_version
+    index_drop = df_fx[filter_1].index
+    df_fx = df_fx.drop(index_drop).reset_index(drop=True)
+
+    df_fx.drop(["Scenario", "FX_Key"], axis=1, inplace=True)
+
+    df_fx["Period_FX"] = df_fx["Currency"] + "_" + df_fx.Date.dt.strftime("%Y")
+
+    return df_fx
+
+
+
+def transform_load(df, df_dimlevels, df_sim, df_fx, df_cecoslist):
+    df.rename(columns={"dataPeriod": "D_PE", "codeAcc": "G/L Account", "FlowAccount": "D_FL", "LC_Amount": "LC_AMOUNT", "Scope": "D_SP", "Scope_T1": "D_SP_T1"}, inplace=True)
+    col_drop = ["intercoAccount", "Partner_Level", "Period_Partner", "Period_Level", "AccountName"]
+    df.drop(col_drop, axis=1, inplace=True)
+    
+    s1 = set(df["LevelName"].unique())
+    s2 = set(df_dimlevels["Lavel Name"].unique())
+    print(s1.difference(s2), "**********************")
+
+    df = pd.merge(df, df_dimlevels[["Lavel Name", "Level Currency", "Company"]], left_on="LevelName", right_on="Lavel Name", how="left")
+    df.rename(columns={"Level Currency": "D_CU", "Company": "D_RU"}, inplace=True)
+    df.drop("Lavel Name", axis=1, inplace=True)
+
+    df = pd.merge(df, df_sim[["Code", "Magnitude", "P&L"]], left_on="G/L Account", right_on="Code", how="left")
+    df.rename(columns={"Magnitude": "D_AC"}, inplace=True)
+    df.drop("Code", axis=1, inplace=True)
+
+    df["Period_FX"] = df["D_CU"] + "_" + df.D_PE.dt.strftime("%Y")
+
+    df = pd.merge(df, df_fx[["Period_FX", "FX RATE FINAL", "FX RATE YTD AVG"]], how="left", on="Period_FX")
+    
+    df["FX"] = np.where(df["P&L"] == "P&L", df["FX RATE YTD AVG"], df["FX RATE FINAL"])
+    df["EUR_Amount"] = df["LC_AMOUNT"] / df["FX"]
+
+    partner_values = [
+        "Partner",
+        "Partner_CH",
+        "Partner_EU",
+        "Partner_OF",
+        "External",
+        "uncategorized",
+        "Uncategorized",
+        "Third party"
+    ]
+
+    df["T1"] = np.where(df["Partner"].isin(partner_values), "S9999", df["Partner"])
+    df["Source"] = "Adaptive"
+    df["Level_CeCo"] = df["LevelName"] + "_" + df["CostCentre"]
+
+    df = pd.merge(df, df_cecoslist[["LevelCeCo", "Profit Center"]], how="left", left_on="Level_CeCo", right_on="LevelCeCo")
+    df.drop("LevelCeCo", axis=1, inplace=True)
+    df.rename(columns={"Profit Center": "Profit Center_pre"}, inplace=True)
+    df.to_csv("semifinal.csv", index=False)
+    df["Profit Center"] = np.where(df["Profit Center_pre"].notnull(), df["Profit Center_pre"], df["D_RU"]+"0000")
+    df.drop(["P&L", "Period_FX", "FX RATE FINAL", "FX RATE YTD AVG", "Partner", "Level_CeCo", "Profit Center_pre"], axis=1, inplace=True)
+    
+    return df 

@@ -27,7 +27,17 @@ dtypes = {
         'CostCentre': 'str',
         'intercoAccount': 'str',
         },
-    "F00": {},
+    "F00_PL": {
+        'D_RU': 'str',
+        'codeAcc': 'str',
+        'Partner': 'str',
+        'D_AU': 'str',
+        'FlowAccount': 'str',
+        'AccountName': 'str',
+        'AccountCode': 'str',
+        'CostCentre': 'str',
+        'intercoAccount': 'str',
+        },
     "SellDown_ConsoFlag": {
         'Level': 'str',
         'Level Type': 'str',
@@ -143,6 +153,53 @@ dtypes = {
         '% EBITDA CONTRIBUTION': 'str',
         '% NET OWNERSHIP': 'str',
         'Platform': 'str',
-        'Country': 'str'}
+        'Country': 'str'},
+    "sim": {
+        'Conta': 'str',
+        'Descritivo EN': 'str',
+        'Conta.1': 'str',
+        'Filtro w/Detail': 'str'
+        },
+    "missing": {
+        'Conta': 'str',
+        'Descritivo PT': 'str',
+        'Descritivo EN': 'str',
+        'Conta.1': 'str',
+        'Descritivo PT.1': 'str',
+        'Descritivo EN.1': 'str',
+        'DF': 'str',
+        'Rubrica 1': 'str',
+        'Rubrica 2': 'str',
+        'Filtro': 'str',
+        'Filtro w/Detail': 'str'
+        },
+    "fx": {
+        'Currency': 'str',
+        'Date': 'str',
+        'Scenario': 'str',
+        'FX_Key': 'str'
+        },
+    "cecosmap": {
+        "Profit Center": "str",
+        "D_RU": "str",
+        "Adaptive PL": "str",
+        "Adaptive BS": "str",
+        "Park ID / CoCe": "str"
+    },
+    "0LIA01": {
+        'LevelName': 'str',
+        'AccountCode': 'str',
+        'CostCentre': 'str',
+        'Partner': 'str',
+        'codeAcc': 'str',
+        'intercoAccount': 'str',
+        'FlowAccount': 'str',
+        'AccountName': 'str',
+        'D_SC': 'str',
+        'D_AU': 'str',
+        'Period_Level': 'str',
+        'Period_Partner': 'str',
+        'Scope': 'str',
+        'Scope_T1': 'str'}
 }
 
